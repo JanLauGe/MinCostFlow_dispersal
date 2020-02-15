@@ -9,6 +9,9 @@
 1. Dist(?)
 1. nchains(number of dispersal events?)
 
+## Algorithm
+Find the relative number pf  of dispersal flow paths going through a particular site?
+
 ## Outputs
 A list of sites and their importance for network dispersal, ranging from `0` to `1`.
 

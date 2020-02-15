@@ -2,7 +2,7 @@
 if (!require('pacman')) install.packages('pacman')
 if (!require('devtools')) install.packages('devtools')
 if (!require('QuadCostAmpl')) devtools::install_github('derek-corcoran-barrios/QuadCostAmpl')
-pacman::p_load(dplyr, gdistance, raster, tidyr, devtools, lpSolve, QuadCostAmpl)
+pacman::p_load(devtools, tidyverse, magrittr, gdistance, raster, lpSolve, QuadCostAmpl, tictoc)
 
 source('functions.R')
 
@@ -11,60 +11,62 @@ source('functions.R')
 data('BinSpp')
 data('Cost')
 # b) from phillips note
-stack_suitability <- get_dummy_data()[[1]]
+layers_habitat <- get_dummy_data()[[1]]
 layer_cost <- get_dummy_data()[[2]]
 
 
 # let's have a look
-Stack = BinSpp[[1]]
-costlayer = Cost
+layers_habitat = BinSpp[[1]]
+layer_cost = Cost
 Dist = 400000
 nchains = 4
 
-plot(Stack)
-plot(costlayer)
+plot(layers_habitat)
+plot(layer_cost)
 
 
 NewFunc <- function(
-  Stack, # layer_habitat?
-  costlayer, # layer_cost?
+  layers_habitat, # layer_habitat?
+  layer_cost, # layer_cost?
   Dist = 400000,
   nchains = 8
 ) {
-  # make mask layer (for possible dispersal?)
-  layer_mask <- !is.na(costlayer)
-  # overwrite stack, filtered for dispersal?
-  Stack <- Stack * layer_mask
+  # filter habitat suitability layer for sites with dispersal cost
+  layers_habitat <- layers_habitat * !is.na(layer_cost)
   
-  # FIXME: This could be a map call
-  # loop over time slices, creating a list of suitability data frames
-  Suitability <- list()
-  for (i in 1:nlayers(Stack)) {
-    temp <- data.frame(
-      Suitability = values(Stack[[i]]),
-      ID = 1:length(values(Stack[[i]])),
-      Time = i - 1)
-    Suitability[[i]] <- temp[complete.cases(temp),]
-  }
-  # combine list elements into one dataframe
-  Suitabilities <- do.call('rbind', Suitability)
+  # create dataframe of habitat cells across time slices
+  df_habitat <- map_dfr(
+    layers_habitat = layers_habitat,
+    .x = 1:nlayers(layers_habitat),
+    .f = ~layers_habitat[[.x]] %>%
+      values() %>%
+      tibble(habitat = .) %>%
+      transmute(
+        id = row_number(),
+        time = .x,
+        habitat = habitat
+      )
+  )
+  
   # find cells with at least 1 suitability
-  s <- Suitabilities %>%
+  s <- df_habitat %>%
     group_by(ID) %>%
-    summarise(SUMA = sum(Suitability)) %>%
+    summarise(SUMA = sum(df_habitat)) %>%
     filter(SUMA > 0)
   # subset suitabilities to only the relevant entries
-  Suitabilities <- Suitabilities[Suitabilities$ID %in% s$ID,]
+  df_habitat <- df_habitat[df_habitat$ID %in% s$ID,]
   
   # make binary raster
   # FIXME: rename raster to avoid caps and reserved name
-  Raster <- sum(Stack)
+  Raster <- sum(layers_habitat)
   Raster[values(Raster) > 0] = 1
   Raster[values(Raster) == 0] = NA
+  #Raster <- sum(Stack) > 0
   
   # TODO: understand what's happening here
-  h16  <- transition(Raster, transitionFunction = function(x) {1}, 16, symm = FALSE)
-  h16   <- geoCorrection(h16, scl = FALSE)
+  # I THINK this is calculating the distance between cells across time slices?
+  h16 <- transition(Raster, transitionFunction = function(x) {1}, 16, symm = FALSE)
+  h16 <- geoCorrection(h16, scl = FALSE)
   
   # FIXME: rename ID var
   ID <- c(1:ncell(Raster))[!is.na(values(Raster))]
@@ -87,23 +89,50 @@ NewFunc <- function(
   
   Cons <- list()
   
-  for (i in 1:(nlayers(Stack) - 1)) {
+  # FIXME: There is a clever tidyverse way to do this...
+  for (i in 1:(nlayers(layers_habitat) - 1)) {
     Cons[[i]] <- data.frame(Cell_From = connections$from, Cell_To = connections$to, Time_From = NA, Time_to = NA, Capacity = NA)
+    # Why is time zero-indexed here?
     Cons[[i]]$Time_From <- i - 1
     Cons[[i]]$Time_to <- i
     for (j in 1:nrow(connections)) {
-      if ((dplyr::filter(Suitabilities, ID == connections$from[j] & Time == i - 1) %>% pull(Suitability)) == 1 & (dplyr::filter(Suitabilities, ID == connections$to[j] & Time == i) %>% pull(Suitability)) == 1) {
+      
+      if (
+        # connection from is suitable
+        (df_habitat %>%
+         filter(ID == connections$from[j] & Time == i - 1) %>%
+         pull(df_habitat) %>%
+         {. == 1})
+        
+        & 
+        
+        # connection to is suitable
+        (df_habitat %>%
+         filter(ID == connections$to[j] & Time == i) %>%
+         pull(df_habitat) %>%
+         {. == 1})) {
+        
+        # set capacity to one
         Cons[[i]]$Capacity[j] <- 1
       }
     }
+    # print layer numbers
+    # FIXME: should be informative message
     print(i)
   }
   
-  Cons <- bind_rows(Cons) %>% dplyr::filter(Capacity == 1)
-  Cost <- data.frame(ID = unique(c(c(Cons$Cell_To), c(Cons$Cell_From))), cost = values(costlayer)[unique(c(c(Cons$Cell_To), c(Cons$Cell_From)))])
-  Cons$Cost <- NA
+  # convert into one tidy dataframe of only valid edges
+  Cons <- Cons %>%
+    bind_rows() %>%
+    dplyr::filter(Capacity == 1)
+  # get cost value of each edge
+  Cost <- tibble(
+    ID = unique(c(Cons$Cell_To, Cons$Cell_From)),
+    cost = layer_cost[ID])
   
-  for(i in 1:nrow(Cons)){
+  # add cost information to connection dataframe
+  Cons$Cost <- NA
+  for (i in 1:nrow(Cons)){
     temp <- Cost %>% dplyr::filter(ID %in% unique(c(Cons$Cell_From[i], Cons$Cell_To[i])))
     if(nrow(temp) == 1){
       Cons$Cost[i] <- temp$cost*2
@@ -113,205 +142,52 @@ NewFunc <- function(
     }
   }
   
-  ##Generate the source and the sink
+  ## generate the source and the sink ==========================================
   
-  #Source
-  
-  ForSource <- Cons %>% dplyr::filter(Time_From == min(Time_From)) %>% mutate(Cell_To = Cell_From, Cell_From = 0, Time_From = -1, Time_to = 0, Capacity = 1, Cost = 0)
-  
-  ForSink <- Cons %>% dplyr::filter(Time_to == max(Time_to)) %>% mutate(Cell_From = Cell_To, Cell_To = length(values(Stack[[1]][[1]])) + 1, Time_From = max(Time_to), Time_to = max(Time_to) + 1, Capacity = 1, Cost = 0)
+  ForSource <- Cons %>%
+    dplyr::filter(Time_From == min(Time_From)) %>%
+    mutate(
+      Cell_To = Cell_From,
+      Cell_From = 0,
+      Time_From = -1,
+      Time_to = 0,
+      Capacity = 1,
+      Cost = 0)
+  ForSink <- Cons %>%
+    dplyr::filter(Time_to == max(Time_to)) %>%
+    mutate(
+      Cell_From = Cell_To,
+      Cell_To = length(values(layers_habitat[[1]][[1]])) + 1,
+      Time_From = max(Time_to),
+      Time_to = max(Time_to) + 1,
+      Capacity = 1,
+      Cost = 0)
   
   Cons <- bind_rows(ForSource, Cons, ForSink) %>% distinct()
-  
   Cons$ID <- 1:nrow(Cons)
   
-  createConstraintsMatrix <- function(edges, total_flow) {
-    
-    # Edge IDs to be used as names
-    names_edges <- edges$ID
-    # Number of edges
-    numberof_edges <- length(names_edges)
-    
-    # Node IDs to be used as names
-    names_nodes <- c(edges$Cell_From, edges$Cell_To) %>% unique
-    # Number of nodes
-    numberof_nodes <- length(names_nodes)
-    
-    # Times id
-    
-    name_times <- c(edges$Time_From, edges$Time_to) %>% unique
-    # Number of nodes
-    numberof_times <- length(name_times)
-    
-    # Build constraints matrix
-    constraints <- list(
-      lhs = NA,
-      dir = NA,
-      rhs = NA)
-    
-    #' Build capacity constraints ------------------------------------------------
-    #' Flow through each edge should not be larger than capacity.
-    #' We create one constraint for each edge. All coefficients zero
-    #' except the ones of the edge in question as one, with a constraint
-    #' that the result is smaller than or equal to capacity of that edge.
-    
-    # Flow through individual edges
-    constraints$lhs <- edges$ID %>%
-      length %>%
-      diag %>%
-      magrittr::set_colnames(edges$ID) %>%
-      magrittr::set_rownames(edges$ID)
-    # should be smaller than or equal to
-    constraints$dir <- rep('<=', times = nrow(edges))
-    # than capacity
-    constraints$rhs <- edges$Capacity
-    
-    
-    #' Build node flow constraints -----------------------------------------------
-    #' For each node, find all edges that go to that node
-    #' and all edges that go from that node. The sum of all inputs
-    #' and all outputs should be zero. So we set inbound edge coefficients as 1
-    #' and outbound coefficients as -1. In any viable solution the result should
-    #' be equal to zero.
-    
-    nodeflow <- matrix(0,
-                       nrow = numberof_nodes,
-                       ncol = numberof_edges,
-                       dimnames = list(names_nodes, names_edges))
-    
-    for (i in names_nodes) {
-      # input arcs
-      edges_in <- edges %>%
-        dplyr::filter(Cell_To == i) %>%
-        dplyr::select(ID) %>%
-        unlist
-      # output arcs
-      edges_out <- edges %>%
-        dplyr::filter(Cell_From == i) %>%
-        dplyr::select(ID) %>%
-        unlist
-      
-      # output arcs
-      
-      # set input coefficients to 1
-      nodeflow[
-        rownames(nodeflow) == i,
-        colnames(nodeflow) %in% edges_in] <- 1
-      
-      # set output coefficients to -1
-      nodeflow[
-        rownames(nodeflow) == i,
-        colnames(nodeflow) %in% edges_out] <- -1
-    }
-    
-    # But exclude source and target edges
-    # as the zero-sum flow constraint does not apply to these!
-    # Source node is assumed to be the one with the minimum ID number
-    # Sink node is assumed to be the one with the maximum ID number
-    sourcenode_id <- min(edges$Cell_From)
-    targetnode_id <- max(edges$Cell_To)
-    # Keep node flow values for separate step below
-    nodeflow_source <- nodeflow[rownames(nodeflow) == sourcenode_id,]
-    nodeflow_target <- nodeflow[rownames(nodeflow) == targetnode_id,]
-    # Exclude them from node flow here
-    nodeflow <- nodeflow[!rownames(nodeflow) %in% c(sourcenode_id, targetnode_id),]
-    
-    # Add nodeflow to the constraints list
-    constraints$lhs <- rbind(constraints$lhs, nodeflow)
-    constraints$dir <- c(constraints$dir, rep('==', times = nrow(nodeflow)))
-    constraints$rhs <- c(constraints$rhs, rep(0, times = nrow(nodeflow)))
-    
-    
-    #' Build initialisation constraints ------------------------------------------
-    #' For the source and the target node, we want all outbound nodes and
-    #' all inbound nodes to be equal to the sum of flow through the network
-    #' respectively
-    
-    # Add initialisation to the constraints list
-    constraints$lhs <- rbind(constraints$lhs,
-                             source = nodeflow_source,
-                             target = nodeflow_target)
-    constraints$dir <- c(constraints$dir, rep('==', times = 2))
-    # Flow should be negative for source, and positive for target
-    constraints$rhs <- c(constraints$rhs, total_flow * -1, total_flow)
-    
-    ##Generate the time constraints, find all the nodes en each time
-    
-    Timeflow <- matrix(0,
-                       nrow = numberof_times,
-                       ncol = numberof_edges,
-                       dimnames = list(name_times, names_edges))
-    
-    for (i in name_times) {
-      # input arcs
-      edges_in <- edges %>%
-        dplyr::filter(Time_to == i) %>%
-        dplyr::select(ID) %>%
-        unlist
-      # output arcs
-      edges_out <- edges %>%
-        dplyr::filter(Time_From == i) %>%
-        dplyr::select(ID) %>%
-        unlist
-      
-      # output arcs
-      
-      # set input coefficients to 1
-      Timeflow[
-        rownames(Timeflow) == i,
-        colnames(Timeflow) %in% edges_in] <- 1
-      
-      # set output coefficients to -1
-      Timeflow[
-        rownames(Timeflow) == i,
-        colnames(Timeflow) %in% edges_out] <- -1
-    }
-    
-    # But exclude source and target edges
-    # as the zero-sum flow constraint does not apply to these!
-    # Source node is assumed to be the one with the minimum ID number
-    # Sink node is assumed to be the one with the maximum ID number
-    sourcetime_id <- min(edges$Time_From)
-    targettime_id <- max(edges$Time_to)
-    # Keep node flow values for separate step below
-    timeflow_source <- Timeflow[rownames(Timeflow) == sourcetime_id,]
-    timeflow_target <- Timeflow[rownames(Timeflow) == targettime_id,]
-    # Exclude them from node flow here
-    Timeflow <- Timeflow[!rownames(Timeflow) %in% c(sourcetime_id, targettime_id),]
-    
-    constraints$lhs <- rbind(constraints$lhs, Timeflow)
-    constraints$dir <- c(constraints$dir, rep('==', times = nrow(Timeflow)))
-    constraints$rhs <- c(constraints$rhs, rep(0, times = nrow(Timeflow)))
-    
-    ###################
-    return(constraints)
-  }
+  constraintsMatrix <- create_constraints_matrix(Cons, nchains)
   
-  constraintsMatrix <- createConstraintsMatrix(Cons, nchains)
-  
-  solution <- lp(
+  # compute flow solution
+  solution <- lpSolve::lp(
     direction = 'min',
-    objective.in = (Cons$Cost),
-    const.mat = constraintsMatrix$lhs,
-    const.dir = constraintsMatrix$dir,
-    const.rhs = constraintsMatrix$rhs)
-  
+    objective.in = Cons[['Cost']],
+    const.mat = constraintsMatrix[['lhs']],
+    const.dir = constraintsMatrix[['dir']],
+    const.rhs = constraintsMatrix[['rhs']])
   # Include solution in edge dataframe
-  Cons$flow <- solution$solution
+  Cons[['flow']] <- solution[['solution']]
   
   TestStack <- list()
-  
-  for(i in 1:nlayers(Stack)){
-    Test<- costlayer
+  for(i in 1:nlayers(layers_habitat)){
+    Test <- layer_cost
     values(Test) <- 0
-    values(Test)[Cons %>% dplyr::filter(Time_From == (i -1)) %>% pull(Cell_From) %>%  unique()] <- Cons %>% dplyr::filter(Time_From == (i - 1)) %>% group_by(Cell_From) %>% summarise(flow = sum(flow))  %>% pull(flow)
+    values(Test)[Cons %>% dplyr::filter(Time_From == (i - 1)) %>% pull(Cell_From) %>%  unique()] <- Cons %>% dplyr::filter(Time_From == (i - 1)) %>% group_by(Cell_From) %>% summarise(flow = sum(flow))  %>% pull(flow)
     TestStack[[i]] <- Test
   }
   
   TestStack <- do.call('stack', TestStack)
-  
   names(TestStack) <- paste0('T', 1:nlayers(TestStack))
-  
   
   return(list(Cons = Cons, Stack = TestStack, Soultions = solution))
 }
