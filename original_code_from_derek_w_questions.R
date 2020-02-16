@@ -1,10 +1,41 @@
 
-# TODO: some issues with reproducibility here
+#' General questions:
+#' 
+#' What's the difference between quadratic flow and linear flow?
+#' Why use linear vs why use quadratic?
+#' -> leads to spread in flow routes
+#' -> more resilience
+#' (linear flow is subset of quadratic flow)
+#' 
+#' Why more than one dispersal path? What is the minimum flow? nchains? Why?
+#' You want to preserve a certain minimum area for the species in each time step
+#' -> nchains = area goal for the species
+#' -> (and minimum flow!)
+#' 
+#' Why constraint of 1 on nodes?
+#' -> resilience
+#' -> retain area
+#' 
+#' What is Dist?
+#' Dist = the maximum dispersal distance (in meters) of the species.
+#' -> in meters because of raster cell size
+#' -> doesn't take into account the habitat along dispersal path
+#' (biomass model could potentially layer this on top)
+#' 
+#' What is cost?
+#' -> how expensive to buy / protect that piece of land?
+#' -> existing protected area usually has zero cost
+#' 
+#' How will this scale to larger rasters?
+#' Could we use continuous habitats instead, i.e. connected cells that are suitable?
+
 if (!require("pacman")) install.packages("pacman")
 pacman::p_load(dplyr, gdistance, raster, tidyr)
 library(QuadCostAmpl)
 
 # TODO: two sets of example data, what's the difference?
+# -> one from package
+# -> one from philips paper
 data("BinSpp")
 data("Cost")
 
@@ -20,16 +51,18 @@ names(Philips) <- c("T0", "T1")
 
 
 NewFunc <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchains = 8){
-  # TODO: why mask using cost layer?
   Masklayer <- costlayer
   values(Masklayer) <- ifelse(is.na(values(Masklayer)), NA, 1)
   Stack <- Stack * Masklayer
   
-  # TODO: code modularization
   accCost2 <- function(x, fromCoords) {
     
     fromCells <- cellFromXY(x, fromCoords)
     # TODO: please explain to me transitionMatrices
+    # -> from gdistance package,
+    # -> creates adjacency graph as matrix
+    # -> main idea: distance of all the different nodes from one another!
+    # -> input shows only cells that are in use in this optimization
     tr <- transitionMatrix(x)
     tr <- rbind(tr, rep(0, nrow(tr)))
     tr <- cbind(tr, rep(0, nrow(tr)))
@@ -42,6 +75,8 @@ NewFunc <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchain
   }
   
   # TODO: discuss continuous vs binary suitability values
+  # -> easier to just think of presences and absences for now
+  # -> maybe factor in with cost in the future?
   Suitability <- list()
   for (i in 1:nlayers(Stack)){
     temp <- data.frame(Suitability = values(Stack[[i]]), ID = 1:length(values(Stack[[i]])), Time = i-1)
@@ -56,9 +91,9 @@ NewFunc <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchain
   Raster <- sum(Stack)
 
   Raster[values(Raster) > 0] = 1
+  # TODO: NA because areas that are not suitable don't need to be considered at all!
   Raster[values(Raster) == 0] = NA
   
-  # TODO: I'm not sure what's happening here. Cost of each potential path, all the way from source to sink?
   h16  <- transition(Raster, transitionFunction=function(x){1},16,symm=FALSE)
 
   h16   <- geoCorrection(h16, scl=FALSE)
@@ -103,6 +138,7 @@ NewFunc <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchain
   for(i in 1:nrow(Cons)){
     temp <- Cost %>% dplyr::filter(ID %in% unique(c(Cons$Cell_From[i], Cons$Cell_To[i])))
     if(nrow(temp) == 1){
+      # TODO: *2 temporary for Philips problem
       Cons$Cost[i] <- temp$cost*2
     }
     if(nrow(temp) == 2){
@@ -122,7 +158,6 @@ NewFunc <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchain
 
   Cons$ID <- 1:nrow(Cons)
   
-  # TODO: Code modularization
   createConstraintsMatrix <- function(edges, total_flow) {
 
     # Edge IDs to be used as names
@@ -264,7 +299,10 @@ NewFunc <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchain
         rownames(Timeflow) == i,
         colnames(Timeflow) %in% edges_out] <- -1
     }
-
+    
+    # TODO: Check out this time flow constraint
+    # -> make sure flow is always forward in time
+    
     # But exclude source and target edges
     # as the zero-sum flow constraint does not apply to these!
     # Source node is assumed to be the one with the minimum ID number
@@ -313,6 +351,8 @@ NewFunc <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchain
 
   return(list(Cons = Cons, Stack = TestStack, Soultions = solution))
 }
+
+# TODO: Is there a way to solve this without doubling up the edges?
 
 a <- NewFunc(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, nchains = 4)
 
@@ -640,3 +680,9 @@ NewFuncByNode <- function(Stack = BinSpp[[1]], Dist = 400000, costlayer = Cost, 
 
   return(list(Cons = Cons, Stack = TestStack, Soultions = solution))
 }
+
+
+#' TODO:
+#' - check for way to make problem work for node flow = 1
+#' - lots of code optimizations for run time decrease
+#' - optional bonus: check maximum flow first, in case problem is not solvable
