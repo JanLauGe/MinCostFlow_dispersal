@@ -1,7 +1,9 @@
 
 
-# create toy example data
 get_dummy_data <- function() {
+  #' helper function that creates example raster data
+  #' consisting of habitat suitability layers for two time steps
+  #' as well as a cost layer
   layer_suitability_t1 <- raster(
     nrows = 7,
     ncols = 1,
@@ -37,6 +39,155 @@ get_dummy_data <- function() {
 }
 
 
+data_philips_problem <- function() {
+  #' helper function to re-create Philips problem in edge list format
+  edges_philips <- data.frame(
+    edge_id = seq(1, 14, 1),
+    node_from = c(1, 1, 1, 1, 2, 2, 2, 3, 4, 5, 6, 7, 8, 9),
+    node_to = c(2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 10),
+    edge_capacity = rep(1, 14),
+    edge_cost = rep(1, 14))
+  return(edges_philips)
+}
+
+
+add_constraints <- function(
+  constraints,
+  new_lhs,
+  new_dir,
+  new_rhs
+) {
+  #' helper function to add new constraints to an already existsing
+  #' list of constraints. Existing list should be length = 3 with elements
+  #' - lhs = the left side of the optimization equation (coefficients)
+  #' - dir = the condition operation, i.e. '>=', '==', or '<='
+  #' - rhs = the constraint value
+  #' TODO: add checks for names, length, etc.
+  constraints[['lhs']] <- rbind(constraints[['lhs']], new_lhs)
+  constraints[['dir']] <- c(constraints[['dir']], new_dir)
+  constraints[['rhs']] <- c(constraints[['rhs']], new_rhs)
+  return(constraints)
+}
+
+
+create_constraints_matrix <- function(edges, total_flow) {
+  #' creates a constraint matrix for solving a minimum cost flow
+  #' problem given a set of edges as data frame in the following format:
+  #' - edge_id (primary key)
+  #' - node_from (foreign key)
+  #' - node_to (foreign key)
+  #' - edge_capacity (int)
+  #' - edge_cost (int)
+  #' Assumptions:
+  #' - source node is the node with the lowest ID
+  #' - target node is the node with the highest ID
+  
+  # extract information on edges
+  ids_edges <- edges[['edge_id']]
+  n_edges <- length(ids_edges)
+  # extract information on nodes
+  ids_nodes <- c(edges[['node_from']], edges[['node_to']]) %>% unique()
+  n_nodes <- length(ids_nodes)
+  # initialize empty constraints matrix
+  constraints <- list(
+    lhs = NA,
+    dir = NA,
+    rhs = NA)
+  
+  # build edge capacity constraints --------------------------------------------
+  #' Flow through each edge should not be larger than capacity.
+  #' We create one constraint for each edge. All coefficients zero
+  #' except the ones of the edge in question as one, with a constraint
+  #' that the result is smaller than or equal to capacity of that edge.
+  #' TODO: We may be able to take this out if we are using node capacity constraints
+  constraints[['lhs']] <- edges %>%
+    pull(edge_id) %>%
+    length() %>%
+    diag() %>%
+    set_colnames(edges[['edge_id']]) %>%
+    set_rownames(edges[['edge_id']])
+  # should be smaller than or equal to
+  constraints[['dir']] <- rep('<=', times = nrow(edges))
+  # than capacity
+  constraints[['rhs']] <- edges[['edge_capacity']]
+  
+  # build node residual constraints ------------------------------------------------
+  #' No node except for the source and target node should retain any flow.
+  #' Therefore, the sum of all inputs and outputs for these nodes should be
+  #' zero. We can force this by going through all nodes and identifying their
+  #' edges. The inbound edges are assigned a coefficient of 1 and the outbound
+  #' edges a coefficients of -1. Any viable solution should achieve a result
+  #' equal to zero, i.e. inputs equal to outputs for all nodes (except S and T).
+  constraint_node_flow <- matrix(
+    data = 0,
+    nrow = n_nodes,
+    ncol = n_edges,
+    dimnames = list(ids_nodes, ids_edges))
+  # loop over nodes
+  for (i in ids_nodes) {
+    # input edges
+    edges_in <- edges %>%
+      filter(node_to == i) %>%
+      pull(edge_id)
+    # output edges
+    edges_out <- edges %>%
+      filter(node_from == i) %>%
+      pull(edge_id)
+    # set input coefficients to 1
+    constraint_node_flow[
+      rownames(constraint_node_flow) == i,
+      colnames(constraint_node_flow) %in% edges_in] <- 1
+    # set output coefficients to -1
+    constraint_node_flow[
+      rownames(constraint_node_flow) == i,
+      colnames(constraint_node_flow) %in% edges_out] <- -1
+  }
+  # exclude source and target edges.
+  # Source node is assumed to be the one with the minimum ID number!
+  # Sink node is assumed to be the one with the maximum ID number!
+  node_id_source <- min(edges[['node_from']])
+  node_id_target <- max(edges[['node_to']])
+  # keep node flow values for separate step below
+  node_flow_source <- constraint_node_flow[rownames(constraint_node_flow) == node_id_source,]
+  node_flow_target <- constraint_node_flow[rownames(constraint_node_flow) == node_id_target,]
+  # exclude them from node flow here
+  constraint_node_flow <- constraint_node_flow[!rownames(constraint_node_flow) %in% c(node_id_source, node_id_target),]
+  # add node residual constraints to the constraints list
+  constraints <- add_constraints(
+    constraints = constraints,
+    new_lhs = constraint_node_flow,
+    new_dir = rep('==', times = nrow(constraint_node_flow)),
+    new_rhs = rep(0, times = nrow(constraint_node_flow)))
+  
+  # build node capacity constraints --------------------------------------------
+  #' In this particular case we want the flow through each node to be smaller
+  #' than or equal to 1 so that the number of chains is preserved. We add this
+  #' constraint in a very similar way to the node flow constraints
+  # take previously computed information on incoming nodes
+  contraint_node_capacity <- constraint_node_flow
+  # discard information on outgoing nodes
+  contraint_node_capacity[contraint_node_capacity < 1] <- 0
+  # add node capacity constraints to the constraints list
+  constraints <- add_constraints(
+    constraints = constraints,
+    new_lhs = contraint_node_capacity,
+    new_dir = rep('<=', times = nrow(contraint_node_capacity)),
+    new_rhs = rep(1, times = nrow(contraint_node_capacity)))
+  
+  # Build initialisation constraints -------------------------------------------
+  #' For the source and the target node, we want all outbound nodes and
+  #' all inbound nodes to be equal to the sum of flow through the network
+  #' respectively
+  constraints <- add_constraints(
+    constraints = constraints,
+    new_lhs = rbind(source = node_flow_source, target = node_flow_target),
+    new_dir = rep('==', times = 2),
+    new_rhs = c(total_flow * -1, total_flow))
+  
+  return(constraints)
+}
+
+
 # TODO: understand this function
 accCost2 <- function(x, fromCoords) {
   fromCells <- cellFromXY(x, fromCoords)
@@ -49,168 +200,4 @@ accCost2 <- function(x, fromCoords) {
   adjacencyGraph <- graph.adjacency(tr, mode = 'directed', weighted = TRUE)
   E(adjacencyGraph)$weight <- 1/E(adjacencyGraph)$weight
   return(shortest.paths(adjacencyGraph, v = startNode, mode = 'out')[-startNode])
-}
-
-
-
-create_constraints_matrix <- function(edges, total_flow) {
-  
-  # Edge IDs to be used as names
-  names_edges <- edges$ID
-  # Number of edges
-  numberof_edges <- length(names_edges)
-  
-  # Node IDs to be used as names
-  names_nodes <- c(edges$Cell_From, edges$Cell_To) %>% unique
-  # Number of nodes
-  numberof_nodes <- length(names_nodes)
-  
-  # Times id
-  
-  name_times <- c(edges$Time_From, edges$Time_to) %>% unique
-  # Number of nodes
-  numberof_times <- length(name_times)
-  
-  # Build constraints matrix
-  constraints <- list(
-    lhs = NA,
-    dir = NA,
-    rhs = NA)
-  
-  #' Build capacity constraints ------------------------------------------------
-  #' Flow through each edge should not be larger than capacity.
-  #' We create one constraint for each edge. All coefficients zero
-  #' except the ones of the edge in question as one, with a constraint
-  #' that the result is smaller than or equal to capacity of that edge.
-  
-  # Flow through individual edges
-  constraints$lhs <- edges$ID %>%
-    length %>%
-    diag %>%
-    magrittr::set_colnames(edges$ID) %>%
-    magrittr::set_rownames(edges$ID)
-  # should be smaller than or equal to
-  constraints$dir <- rep('<=', times = nrow(edges))
-  # than capacity
-  constraints$rhs <- edges$Capacity
-  
-  
-  #' Build node flow constraints -----------------------------------------------
-  #' For each node, find all edges that go to that node
-  #' and all edges that go from that node. The sum of all inputs
-  #' and all outputs should be zero. So we set inbound edge coefficients as 1
-  #' and outbound coefficients as -1. In any viable solution the result should
-  #' be equal to zero.
-  
-  nodeflow <- matrix(0,
-                     nrow = numberof_nodes,
-                     ncol = numberof_edges,
-                     dimnames = list(names_nodes, names_edges))
-  
-  for (i in names_nodes) {
-    # input arcs
-    edges_in <- edges %>%
-      dplyr::filter(Cell_To == i) %>%
-      dplyr::select(ID) %>%
-      unlist
-    # output arcs
-    edges_out <- edges %>%
-      dplyr::filter(Cell_From == i) %>%
-      dplyr::select(ID) %>%
-      unlist
-    
-    # output arcs
-    
-    # set input coefficients to 1
-    nodeflow[
-      rownames(nodeflow) == i,
-      colnames(nodeflow) %in% edges_in] <- 1
-    
-    # set output coefficients to -1
-    nodeflow[
-      rownames(nodeflow) == i,
-      colnames(nodeflow) %in% edges_out] <- -1
-  }
-  
-  # But exclude source and target edges
-  # as the zero-sum flow constraint does not apply to these!
-  # Source node is assumed to be the one with the minimum ID number
-  # Sink node is assumed to be the one with the maximum ID number
-  sourcenode_id <- min(edges$Cell_From)
-  targetnode_id <- max(edges$Cell_To)
-  # Keep node flow values for separate step below
-  nodeflow_source <- nodeflow[rownames(nodeflow) == sourcenode_id,]
-  nodeflow_target <- nodeflow[rownames(nodeflow) == targetnode_id,]
-  # Exclude them from node flow here
-  nodeflow <- nodeflow[!rownames(nodeflow) %in% c(sourcenode_id, targetnode_id),]
-  
-  # Add nodeflow to the constraints list
-  constraints$lhs <- rbind(constraints$lhs, nodeflow)
-  constraints$dir <- c(constraints$dir, rep('==', times = nrow(nodeflow)))
-  constraints$rhs <- c(constraints$rhs, rep(0, times = nrow(nodeflow)))
-  
-  
-  #' Build initialisation constraints ------------------------------------------
-  #' For the source and the target node, we want all outbound nodes and
-  #' all inbound nodes to be equal to the sum of flow through the network
-  #' respectively
-  
-  # Add initialisation to the constraints list
-  constraints$lhs <- rbind(constraints$lhs,
-                           source = nodeflow_source,
-                           target = nodeflow_target)
-  constraints$dir <- c(constraints$dir, rep('==', times = 2))
-  # Flow should be negative for source, and positive for target
-  constraints$rhs <- c(constraints$rhs, total_flow * -1, total_flow)
-  
-  ##Generate the time constraints, find all the nodes en each time
-  
-  Timeflow <- matrix(0,
-                     nrow = numberof_times,
-                     ncol = numberof_edges,
-                     dimnames = list(name_times, names_edges))
-  
-  for (i in name_times) {
-    # input arcs
-    edges_in <- edges %>%
-      dplyr::filter(Time_to == i) %>%
-      dplyr::select(ID) %>%
-      unlist
-    # output arcs
-    edges_out <- edges %>%
-      dplyr::filter(Time_From == i) %>%
-      dplyr::select(ID) %>%
-      unlist
-    
-    # output arcs
-    
-    # set input coefficients to 1
-    Timeflow[
-      rownames(Timeflow) == i,
-      colnames(Timeflow) %in% edges_in] <- 1
-    
-    # set output coefficients to -1
-    Timeflow[
-      rownames(Timeflow) == i,
-      colnames(Timeflow) %in% edges_out] <- -1
-  }
-  
-  # But exclude source and target edges
-  # as the zero-sum flow constraint does not apply to these!
-  # Source node is assumed to be the one with the minimum ID number
-  # Sink node is assumed to be the one with the maximum ID number
-  sourcetime_id <- min(edges$Time_From)
-  targettime_id <- max(edges$Time_to)
-  # Keep node flow values for separate step below
-  timeflow_source <- Timeflow[rownames(Timeflow) == sourcetime_id,]
-  timeflow_target <- Timeflow[rownames(Timeflow) == targettime_id,]
-  # Exclude them from node flow here
-  Timeflow <- Timeflow[!rownames(Timeflow) %in% c(sourcetime_id, targettime_id),]
-  
-  constraints$lhs <- rbind(constraints$lhs, Timeflow)
-  constraints$dir <- c(constraints$dir, rep('==', times = nrow(Timeflow)))
-  constraints$rhs <- c(constraints$rhs, rep(0, times = nrow(Timeflow)))
-  
-  ###################
-  return(constraints)
 }
