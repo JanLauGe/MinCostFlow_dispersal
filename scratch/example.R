@@ -49,24 +49,22 @@ NewFunc <- function(
   )
   
   # find cells with at least 1 suitability
-  s <- df_habitat %>%
-    group_by(ID) %>%
-    summarise(SUMA = sum(df_habitat)) %>%
-    filter(SUMA > 0)
-  # subset suitabilities to only the relevant entries
-  df_habitat <- df_habitat[df_habitat$ID %in% s$ID,]
+  df_habitat <- df_habitat %>%
+    group_by(id) %>%
+    filter(any(habitat > 0)) %>%
+    ungroup()
   
   # make binary raster
   # FIXME: rename raster to avoid caps and reserved name
+  # FIXME: is there a way to do this with the sp package?
   Raster <- sum(layers_habitat)
   Raster[values(Raster) > 0] = 1
   Raster[values(Raster) == 0] = NA
-  #Raster <- sum(Stack) > 0
   
-  # TODO: understand what's happening here
-  # I THINK this is calculating the distance between cells across time slices?
-  h16 <- transition(Raster, transitionFunction = function(x) {1}, 16, symm = FALSE)
-  h16 <- geoCorrection(h16, scl = FALSE)
+  # calculate the distance between cells across time slices?
+  h16 <- Raster %>%
+    transition(transitionFunction = function(x) {1}, 16, symm = FALSE) %>%
+    geoCorrection(scl = FALSE)
   
   # FIXME: rename ID var
   ID <- c(1:ncell(Raster))[!is.na(values(Raster))]
