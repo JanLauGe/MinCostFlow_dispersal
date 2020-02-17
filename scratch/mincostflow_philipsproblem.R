@@ -3,7 +3,7 @@ if (!require('pacman')) install.packages('pacman')
 if (!require('devtools')) install.packages('devtools')
 if (!require('QuadCostAmpl')) devtools::install_github('derek-corcoran-barrios/QuadCostAmpl')
 pacman::p_load(devtools, tidyverse, magrittr, gdistance, raster, lpSolve, QuadCostAmpl, igraph, tictoc)
-source('functions.R')
+source('R/funs_min_cost_flow.R')
 
 # example data -----------------------------------------------------------------
 # get edge data for phillips problem

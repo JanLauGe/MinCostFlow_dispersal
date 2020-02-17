@@ -84,7 +84,6 @@ NewFunc <- function(
   Cons <- list()
 
   # FIXME: There is a clever tidyverse way to do this...
-  browser()
   for (i in 1:(nlayers(layers_habitat) - 1)) {
     Cons[[i]] <- data.frame(Cell_From = connections$from, Cell_To = connections$to, Time_From = NA, Time_to = NA, Capacity = NA)
     # Why is time zero-indexed here?

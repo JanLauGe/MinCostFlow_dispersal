@@ -86,6 +86,10 @@ create_constraints_matrix <- function(edges, total_flow) {
   ids_edges <- edges[['edge_id']]
   n_edges <- length(ids_edges)
   # extract information on nodes
+  # Source node is assumed to be the one with the minimum ID number!
+  # Sink node is assumed to be the one with the maximum ID number!
+  node_id_source <- min(edges[['node_from']])
+  node_id_target <- max(edges[['node_to']])
   ids_nodes <- c(edges[['node_from']], edges[['node_to']]) %>% unique()
   n_nodes <- length(ids_nodes)
   # initialize empty constraints matrix
@@ -118,7 +122,7 @@ create_constraints_matrix <- function(edges, total_flow) {
   #' edges. The inbound edges are assigned a coefficient of 1 and the outbound
   #' edges a coefficients of -1. Any viable solution should achieve a result
   #' equal to zero, i.e. inputs equal to outputs for all nodes (except S and T).
-  constraint_node_flow <- matrix(
+  constraint_node_residuals <- matrix(
     data = 0,
     nrow = n_nodes,
     ncol = n_edges,
@@ -134,37 +138,33 @@ create_constraints_matrix <- function(edges, total_flow) {
       filter(node_from == i) %>%
       pull(edge_id)
     # set input coefficients to 1
-    constraint_node_flow[
-      rownames(constraint_node_flow) == i,
-      colnames(constraint_node_flow) %in% edges_in] <- 1
+    constraint_node_residuals[
+      rownames(constraint_node_residuals) == i,
+      colnames(constraint_node_residuals) %in% edges_in] <- 1
     # set output coefficients to -1
-    constraint_node_flow[
-      rownames(constraint_node_flow) == i,
-      colnames(constraint_node_flow) %in% edges_out] <- -1
+    constraint_node_residuals[
+      rownames(constraint_node_residuals) == i,
+      colnames(constraint_node_residuals) %in% edges_out] <- -1
   }
   # exclude source and target edges.
-  # Source node is assumed to be the one with the minimum ID number!
-  # Sink node is assumed to be the one with the maximum ID number!
-  node_id_source <- min(edges[['node_from']])
-  node_id_target <- max(edges[['node_to']])
   # keep node flow values for separate step below
-  node_flow_source <- constraint_node_flow[rownames(constraint_node_flow) == node_id_source,]
-  node_flow_target <- constraint_node_flow[rownames(constraint_node_flow) == node_id_target,]
+  node_flow_source <- constraint_node_residuals[rownames(constraint_node_residuals) == node_id_source,]
+  node_flow_target <- constraint_node_residuals[rownames(constraint_node_residuals) == node_id_target,]
   # exclude them from node flow here
-  constraint_node_flow <- constraint_node_flow[!rownames(constraint_node_flow) %in% c(node_id_source, node_id_target),]
+  constraint_node_residuals <- constraint_node_residuals[!rownames(constraint_node_residuals) %in% c(node_id_source, node_id_target),]
   # add node residual constraints to the constraints list
   constraints <- add_constraints(
     constraints = constraints,
-    new_lhs = constraint_node_flow,
-    new_dir = rep('==', times = nrow(constraint_node_flow)),
-    new_rhs = rep(0, times = nrow(constraint_node_flow)))
+    new_lhs = constraint_node_residuals,
+    new_dir = rep('==', times = nrow(constraint_node_residuals)),
+    new_rhs = rep(0, times = nrow(constraint_node_residuals)))
 
   # build node capacity constraints --------------------------------------------
   #' In this particular case we want the flow through each node to be smaller
   #' than or equal to 1 so that the number of chains is preserved. We add this
   #' constraint in a very similar way to the node flow constraints
   # take previously computed information on incoming nodes
-  contraint_node_capacity <- constraint_node_flow
+  contraint_node_capacity <- constraint_node_residuals
   # discard information on outgoing nodes
   contraint_node_capacity[contraint_node_capacity < 1] <- 0
   # add node capacity constraints to the constraints list
