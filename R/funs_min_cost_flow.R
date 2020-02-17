@@ -39,15 +39,15 @@ get_dummy_data <- function() {
 }
 
 
-data_philips_problem <- function() {
-  #' helper function to re-create Philips problem in edge list format
-  edges_philips <- data.frame(
+data_phillips_problem <- function() {
+  #' helper function to re-create phillips problem in edge list format
+  edges_phillips <- data.frame(
     edge_id = seq(1, 14, 1),
     node_from = c(1, 1, 1, 1, 2, 2, 2, 3, 4, 5, 6, 7, 8, 9),
     node_to = c(2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 10),
     edge_capacity = rep(1, 14),
     edge_cost = rep(1, 14))
-  return(edges_philips)
+  return(edges_phillips)
 }
 
 
@@ -81,7 +81,7 @@ create_constraints_matrix <- function(edges, total_flow) {
   #' Assumptions:
   #' - source node is the node with the lowest ID
   #' - target node is the node with the highest ID
-  
+
   # extract information on edges
   ids_edges <- edges[['edge_id']]
   n_edges <- length(ids_edges)
@@ -93,7 +93,7 @@ create_constraints_matrix <- function(edges, total_flow) {
     lhs = NA,
     dir = NA,
     rhs = NA)
-  
+
   # build edge capacity constraints --------------------------------------------
   #' Flow through each edge should not be larger than capacity.
   #' We create one constraint for each edge. All coefficients zero
@@ -110,7 +110,7 @@ create_constraints_matrix <- function(edges, total_flow) {
   constraints[['dir']] <- rep('<=', times = nrow(edges))
   # than capacity
   constraints[['rhs']] <- edges[['edge_capacity']]
-  
+
   # build node residual constraints ------------------------------------------------
   #' No node except for the source and target node should retain any flow.
   #' Therefore, the sum of all inputs and outputs for these nodes should be
@@ -158,7 +158,7 @@ create_constraints_matrix <- function(edges, total_flow) {
     new_lhs = constraint_node_flow,
     new_dir = rep('==', times = nrow(constraint_node_flow)),
     new_rhs = rep(0, times = nrow(constraint_node_flow)))
-  
+
   # build node capacity constraints --------------------------------------------
   #' In this particular case we want the flow through each node to be smaller
   #' than or equal to 1 so that the number of chains is preserved. We add this
@@ -173,7 +173,7 @@ create_constraints_matrix <- function(edges, total_flow) {
     new_lhs = contraint_node_capacity,
     new_dir = rep('<=', times = nrow(contraint_node_capacity)),
     new_rhs = rep(1, times = nrow(contraint_node_capacity)))
-  
+
   # Build initialisation constraints -------------------------------------------
   #' For the source and the target node, we want all outbound nodes and
   #' all inbound nodes to be equal to the sum of flow through the network
@@ -183,7 +183,7 @@ create_constraints_matrix <- function(edges, total_flow) {
     new_lhs = rbind(source = node_flow_source, target = node_flow_target),
     new_dir = rep('==', times = 2),
     new_rhs = c(total_flow * -1, total_flow))
-  
+
   return(constraints)
 }
 
