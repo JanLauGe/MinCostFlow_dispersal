@@ -11,12 +11,12 @@ data('BinSpp')
 data('Cost')
 
 # let's have a look
-#layers_habitat = BinSpp[[1]][[1:2]]
-layers_habitat <- get_dummy_data()[[1]]
-#layer_cost = Cost
-layer_cost <- get_dummy_data()[[2]]
+layers_habitat = BinSpp[[1]]
+#layers_habitat <- get_dummy_data()[[1]]
+layer_cost = Cost
+#layer_cost <- get_dummy_data()[[2]]
 Dist = 400000
-nchains = 1
+nchains = 4
 
 
 #plot(layers_habitat)
@@ -39,7 +39,11 @@ df_habitat <- map_dfr(
       time = .x,
       habitat = habitat)) %>%
   # give the same cell in different time slices different IDs
-  mutate(cell_id = cell_id + max(cell_id) * time)
+  mutate(raster_id = cell_id, cell_id = cell_id + max(cell_id) * time)
+
+### Generate a DF that keeps the ID of the raster cell and the new cell ID
+
+df_IDs <- df_habitat %>% rename(node_to = cell_id) %>% dplyr::select(node_to, raster_id)
 
 # extract cost value of each edge
 # TODO: there must be a better way to do this without replicating data * n_timeslices
@@ -67,12 +71,21 @@ edges_timesteps <- map_dfr(
     node_to = df_habitat %>%
       filter(time == .x & habitat == 1) %>%
       pull(cell_id),
-    timeslice_to = .x)) %>%
+    timeslice_to = .x)) %>% mutate(
+       edge_id = row_number(),
+       edge_capacity = NA,
+      edge_cost = NA)
   # add edge id and capacity
-  mutate(
-    edge_id = row_number(),
-    edge_capacity = 1,
-    edge_cost = runif(n()))
+
+
+for(i in 1:nrow(edges_timesteps)){
+  edges_timesteps$edge_cost[i] <- df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_from] + df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_to]
+  edges_timesteps$edge_capacity[i] <- df_habitat$habitat[df_habitat$cell_id == edges_timesteps[1,]$node_from]
+}
+  #mutate(
+  #  edge_id = row_number(),
+  #  edge_capacity = 1,
+   # edge_cost = runif(n()))
   # add cost
   #left_join(df_cost, by = c('node_to' = 'cell_id'))
 
@@ -115,7 +128,7 @@ edges_formatted <- edges_timesteps %>%
 # create constraints matrix
 constraints_matrix <- create_constraints_matrix(
   edges = edges_formatted,
-  total_flow = 2)
+  total_flow = nchains)
 
 # run lpSolve to find best solution
 solution <- lp(
@@ -131,13 +144,30 @@ solution[['solution']]
 
 # visualize --------------------------------------------------------------------
 # combine with edge information
-edges_solved <- bind_cols(edges_formatted, solution = solution[['solution']])
+edges_solved <- bind_cols(edges_formatted, solution = solution[['solution']]) %>% left_join(df_IDs)
 
 
 
+edges_solved %>% group_by(timeslice_to) %>% summarise(flow = sum(solution))
 
+edges_solved %>% group_by(timeslice_to) %>% summarise(flow = max(solution))
 
+TestStack <- list()
 
+edges_solved
+
+for(i in 1:nlayers(layers_habitat)){
+  Test<- layer_cost
+  values(Test) <- 0
+  values(Test)[edges_solved %>% dplyr::filter(timeslice_to == (i)) %>% pull(raster_id) %>%  unique()] <- edges_solved %>% dplyr::filter(timeslice_to == (i)) %>% group_by(raster_id) %>% summarise(flow = sum(solution))  %>% pull(flow)
+  TestStack[[i]] <- Test
+}
+
+TestStack <- do.call("stack", TestStack)
+
+names(TestStack) <- paste0("T", 1:nlayers(TestStack))
+
+plot(TestStack)
 
 
 
