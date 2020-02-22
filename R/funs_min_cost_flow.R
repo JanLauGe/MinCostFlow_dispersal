@@ -201,3 +201,45 @@ accCost2 <- function(x, fromCoords) {
   E(adjacencyGraph)$weight <- 1/E(adjacencyGraph)$weight
   return(shortest.paths(adjacencyGraph, v = startNode, mode = 'out')[-startNode])
 }
+
+edge_distance_limit <- function(layer_cost, layers_habitat, Dist){
+  Masklayer <- layer_cost
+  values(Masklayer) <- ifelse(is.na(values(Masklayer)), NA, 1)
+
+  Stack <- layers_habitat * Masklayer
+
+  Raster <- sum(Stack)
+  Raster[values(Raster) > 0] = 1
+  Raster[values(Raster) == 0] = NA
+
+  h16 <- transition(Raster, transitionFunction=function(x){1},16,symm=FALSE)
+  h16 <- geoCorrection(h16, scl=FALSE)
+  ID <-c(1:ncell(Raster))[!is.na(values(Raster))]
+
+  B <- xyFromCell(Raster, cell = ID)
+  connections <- list()
+  #For each pair of cells in B
+  for (i in 1:nrow(B)){
+    #Create a temporal raster for each row with the distance from cell xy to all other cells
+    temp <- accCost2(h16,B[i,])
+    index <- which(temp < Dist)
+    connections[[i]] <- cbind(ID[i], index, temp[index])
+  }
+
+
+  connections <- do.call("rbind", connections)
+  connections <- as.data.frame(connections)
+
+  colnames(connections) <- c("from", "to", "dist")
+
+  connections <- map_dfr(
+    connections = connections,
+    .x = 1:nlayers(layers_habitat),
+    .f = ~connections %>%
+      mutate(
+        node_from = from + ncell(layer_cost) * .x,
+        node_to= ncell(layer_cost) + (to + ncell(layer_cost) * .x)))
+
+  connections <- connections %>% dplyr::select(-from, -to)
+  return(connections)
+}
