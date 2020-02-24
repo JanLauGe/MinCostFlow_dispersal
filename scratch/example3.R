@@ -78,14 +78,22 @@ edges_timesteps <- map_dfr(
       pull(cell_id),
     timeslice_to = .x)) %>% mutate(
       edge_id = row_number(),
-      edge_capacity = NA,
+      edge_capacity = 1,
       edge_cost = NA)
 # add edge id and capacity
 
 
 for(i in 1:nrow(edges_timesteps)){
-  edges_timesteps$edge_cost[i] <- df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_from] + df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_to]
-  edges_timesteps$edge_capacity[i] <- df_habitat$habitat[df_habitat$cell_id == edges_timesteps[1,]$node_from]
+  #Check if the raster ID is equal in node_to and node_from
+  if(df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_to] == df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_from]){
+    ## If that is the case just add the cost once
+    edges_timesteps$edge_cost[i] <- df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_from]
+  }
+  #Check if the raster ID is Different in node_to and node_from
+  if(df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_to] != df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_from]){
+    ## If that is the case just add the cost twice
+    edges_timesteps$edge_cost[i] <- df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_from] + df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_to]
+  }
 }
 
 edges_timesteps <- left_join(edges_timesteps, connections) %>% dplyr::filter(!is.na(dist)) %>% dplyr::select(-dist)
