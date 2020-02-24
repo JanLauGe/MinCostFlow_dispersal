@@ -1,0 +1,321 @@
+---
+title: "Tests and ideas with new package"
+author: "Derek Corcoran"
+date: "`r Sys.Date()`"
+output:
+  bookdown::pdf_document2:
+    keep_tex: true
+    fig_caption: true
+    toc: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = FALSE, warning = FALSE, tidy = 'formatR')
+```
+
+
+# Load packages
+
+I will load a bunch of packages including *ggraph* to ilustrate the network, in particular the Phillips Problem.
+
+```{r}
+library(dispRsal)
+library(kableExtra)
+library(gdistance)
+library(ggraph)
+library(igraph)
+library(lpSolve)
+library(magrittr)
+library(raster)
+library(tidyverse)
+```
+
+
+# The Phillips problem
+
+This problem starts with a toy model of a species. We have modeled the distribution of that species and we have projected that distribution through 2 different time-slices T0 and T1, this is conceptualized by the following rasterstack called *Phillips*, as seen in Figure \@ref(fig:PhilDist)
+
+```{r, echo = FALSE}
+a <- raster(nrows= 7, ncols = 1, vals= c(0,1,0,0,1,1,1), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
+
+b <- raster(nrows= 7, ncols = 1, vals= c(1, 0, 1,1,0,0,1), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
+
+Phillips <- stack(a,b)
+names(Phillips) <- c("T0", "T1")
+```
+
+```{r PhilDist, fig.cap= "Predicted distribution of a species for two time slices, green means the species is predicted to be present, and grey that the species is predicted to be absent"}
+plot(Phillips)
+```
+
+
+Fot that same area we have a costlayer (*PhilCost*), we but the two middle cells are unavailable for the species, because there is an obstacle there (eg: a city or a glaciar) as seen in Figure \@ref(fig:Cost)
+
+
+```{r Cost, echo=FALSE, fig.cap= "Raster with the cost of buying each cell, black cells are unavailable cells"}
+PhilCost <- raster(nrows= 7, ncols = 1, vals= c(0.5, 1, 0.5,NA,NA,0.25,0.25), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
+plot(PhilCost, colNA = "black")
+```
+
+
+The idea is to create a solution where the species has always at least two cells (*nchains*) available at each time-slice, but those cells have to be within reach for the species between time-slices. Let's say for example that for this species, the distance the species can travel is 111 km between time-slice 0 to time-slice 1, in this case the species would only be able to move to one adyacent cell between time-slices, this will be defined by the following variables:
+
+
+```{r}
+layers_habitat = Phillips
+layer_cost = PhilCost
+Dist = 111000
+nchains = 2
+```
+
+
+# Step 1
+
+First we eliminate the NA sites created by the unavailable areas shown in figure \@ref(fig:Cost)
+
+```{r}
+layers_habitat <- layers_habitat * !is.na(layer_cost)
+```
+
+This will modify the raster shown in figure 1 \@ref(fig:PhilDist) into the one we see in figure \@ref(fig:ModHab), notice that we lost 2 cells that use to be available when we first looked at the data.
+
+```{r}
+layers_habitat <- layers_habitat * !is.na(layer_cost)
+```
+
+```{r ModHab, fig.cap="Habitat layers modified so that we take out the non available values", echo = FALSE}
+plot(layers_habitat)
+```
+
+Then we create a data frame of all the nodes, as we see in table \@ref(tab:A), a new *Cell_id* was generated that is unique to every node in each time-slice, but the raster_id was kept in order to be able to get the results back to the raster.
+
+```{r}
+df_habitat <- map_dfr(
+  layers_habitat = layers_habitat,
+  .x = 1:nlayers(layers_habitat),
+  .f = ~layers_habitat[[.x]] %>%
+    values() %>%
+    tibble(habitat = .) %>%
+    transmute(
+      cell_id = row_number(),
+      time = .x,
+      habitat = habitat)) %>%
+  # give the same cell in different time slices different IDs
+  mutate(raster_id = cell_id, cell_id = cell_id + max(cell_id) * time)
+```
+
+
+```{r A, echo = FALSE}
+kable(df_habitat, "latex", booktabs = T, row.names = F, caption = "Nodes with a new cell id that is unique for every time slice, the raster id is also kept so that we can get the results back to the raster") %>% kable_styling(latex_options =  c('striped', 'hold_position'))
+```
+
+
+# Generate a DF that keeps the ID of the raster cell and the new cell ID
+
+In order to be able to compare the cell_id with raster_id in further tables a table was created with this use in mind, this is seen in table \@ref(tab:IDs):
+
+```{r}
+df_IDs <- df_habitat %>% rename(node_to = cell_id) %>% dplyr::select(node_to, raster_id)
+```
+
+```{r IDs, echo = FALSE}
+kable(df_IDs,"latex", booktabs = T, row.names = F, caption = "Table of cell ID and Raster ID equivalencies") %>% kable_styling(latex_options = c('striped', 'hold_position'))
+```
+
+### Generate a DF with the costs of each cell
+
+Using the cost layer seen in figure \@ref(fig:Cost) we generate a table with the cost of each node as seen in table table \@ref(tab:CostTable), this could be made smaller by only using the values of each cell and then using \@ref(tab:IDs) to reference the cost
+
+```{r}
+df_cost <- layer_cost %>%
+  values() %>%
+  tibble(cost = .) %>%
+  mutate(cell_id = row_number())
+df_cost <- map_dfr(
+  df_cost = df_cost,
+  .x = 1:nlayers(layers_habitat),
+  .f = ~df_cost %>%
+    transmute(
+      cell_id = cell_id + max(cell_id) * .x,
+      edge_cost = cost))
+```
+
+```{r CostTable, echo = FALSE}
+kable(df_cost,"latex", booktabs = T, row.names = F, caption = "Cost of every node") %>% kable_styling(latex_options = c('striped', 'hold_position'))
+```
+
+# Getting the distances between variables
+
+For that we use the function `edge_distance_limit` this will give use table \@ref(tab:cons), in which we have the pair of nodes and the distance between them in thre raster, this has already filtered out any distances greater than `Dist`
+
+```{r}
+connections <- edge_distance_limit(layer_cost = PhilCost, layers_habitat = Phillips, Dist = Dist)
+```
+
+```{r cons, echo = FALSE}
+kable(connections,"latex", booktabs = T, row.names = F, caption = "Edgelist of pairs of nodes among times including distance in meters") %>% kable_styling(latex_options = c('striped', 'hold_position'))
+```
+
+# get all valid edge connections,
+
+In this step we do 3 different processes
+
+First we filter only the pairs of nodes that hava a capacity of one:
+
+```{r}
+edges_timesteps <- map_dfr(
+  df_habitat = df_habitat,
+  .x = 2:nlayers(layers_habitat),
+  .f = ~expand_grid(
+    node_from = df_habitat %>%
+      filter(time == .x - 1 & habitat == 1) %>%
+      pull(cell_id),
+    node_to = df_habitat %>%
+      filter(time == .x & habitat == 1) %>%
+      pull(cell_id),
+    timeslice_to = .x)) %>% mutate(
+      edge_id = row_number(),
+      edge_capacity = 1,
+      edge_cost = NA)
+```
+
+
+Then we add the cost by adding the costs of both nodes that participate in the edge:
+
+```{r}
+for(i in 1:nrow(edges_timesteps)){
+  #Check if the raster ID is equal in node_to and node_from
+  if(df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_to] == df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_from]){
+    ## If that is the case just add the cost once
+    edges_timesteps$edge_cost[i] <- df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_from]
+  }
+  #Check if the raster ID is Different in node_to and node_from
+  if(df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_to] != df_IDs$raster_id[df_IDs$node_to == edges_timesteps[i,]$node_from]){
+    ## If that is the case just add the cost twice
+    edges_timesteps$edge_cost[i] <- df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_from] + df_cost$edge_cost[df_cost$cell_id == edges_timesteps[i,]$node_to]
+  }
+}
+```
+
+And finally, we filter those nodes according to the ones that are at distances permited by `Dist` using table \@ref(tab:cons), we finally get table \@ref(tab:edgesvalid).
+
+```{r}
+edges_timesteps <- left_join(edges_timesteps, connections) %>% dplyr::filter(!is.na(dist)) %>% dplyr::select(-dist)
+```
+
+
+```{r edgesvalid, echo = FALSE}
+kable(edges_timesteps,"latex", booktabs = T, row.names = F, caption = "Edgelist of pairs of nodes where habitat is 1 and distance is bellow 11,000") %>% kable_styling(latex_options = c('striped', 'hold_position'))
+```
+
+
+# add source and target edges
+
+
+```{r}
+edges_source <- tibble(
+  # lowest ids available
+  # FIXME: temp workaround
+  edge_id = min(edges_timesteps[['edge_id']]),
+  node_from = 0,
+  # find all timeslice 1 nodes
+  node_to = edges_timesteps %>%
+    filter(timeslice_to == 2) %>%
+    pull(node_from) %>%
+    unique(),
+  timeslice_to = 1,
+  edge_capacity = nchains,
+  edge_cost = 1) %>%
+  # unique ids!
+  mutate(edge_id = edge_id - row_number())
+
+edges_target <- tibble(
+  # FIXME: temp workaround
+  edge_id = max(edges_timesteps[['edge_id']]),
+  node_from = edges_timesteps %>%
+    filter(timeslice_to == max(edges_timesteps[['timeslice_to']])) %>%
+    pull(node_to) %>%
+    unique(),
+  node_to = max(edges_timesteps[['node_to']]) + 1,
+  timeslice_to = max(edges_timesteps[['timeslice_to']]) + 1,
+  edge_capacity = nchains,
+  edge_cost = 1) %>%
+  # unique ids!
+  mutate(edge_id = edge_id + row_number())
+
+edges_formatted <- edges_timesteps %>%
+  bind_rows(edges_source, edges_target) %>%
+  arrange(edge_id)
+```
+
+```{r, echo = FALSE}
+kable(edges_formatted,"latex", booktabs = T, caption = "Edgelist of pairs of nodes where habitat is 1 and distance is bellow 11,000, including source and target") %>% kable_styling(latex_options = "striped")
+```
+
+# sovler -----------------------------------------------------------------------
+# create constraints matrix
+
+```{r}
+constraints_matrix <- create_constraints_matrix(
+  edges = edges_formatted,
+  total_flow = nchains)
+```
+
+```{r, echo = FALSE}
+kable(constraints_matrix,"latex", booktabs = T, row.names = F, caption = "Constraints matrix")
+```
+
+# run lpSolve to find best solution
+
+```{r}
+solution <- lp(
+  direction = 'min',
+  objective.in = edges_formatted[['edge_cost']],
+  const.mat = constraints_matrix[['lhs']],
+  const.dir = constraints_matrix[['dir']],
+  const.rhs = constraints_matrix[['rhs']])
+```
+
+
+
+
+
+
+# visualize --------------------------------------------------------------------
+# combine with edge information
+
+```{r}
+edges_solved <- bind_cols(edges_formatted, solution = solution[['solution']]) %>% left_join(df_IDs) %>% dplyr::filter(solution != 0)
+
+
+TestStack <- list()
+
+
+for(i in 1:nlayers(layers_habitat)){
+  Test<- layer_cost
+  values(Test) <- 0
+  values(Test)[edges_solved %>% dplyr::filter(timeslice_to == (i)) %>% pull(raster_id) %>%  unique()] <- edges_solved %>% dplyr::filter(timeslice_to == (i)) %>% group_by(raster_id) %>% summarise(flow = sum(solution))  %>% pull(flow)
+  TestStack[[i]] <- Test
+}
+
+TestStack <- do.call("stack", TestStack)
+
+names(TestStack) <- paste0("T", 1:nlayers(TestStack))
+
+```
+
+
+
+```{r Solution, echo = FALSE}
+kable(edges_solved,"latex", booktabs = T, row.names = F, caption = "Solution") %>% kable_styling(latex_options = c('striped', 'hold_position'))
+```
+
+```{r, fig.cap="Time slice by time slice solution", echo=FALSE}
+plot(TestStack)
+```
+
+
+```{r, fig.cap="Global solution", echo=FALSE}
+plot(max(TestStack))
+```
+
