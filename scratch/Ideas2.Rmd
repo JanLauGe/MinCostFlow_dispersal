@@ -38,7 +38,7 @@ This problem starts with a toy model of a species. We have modeled the distribut
 ```{r, echo = FALSE}
 a <- raster(nrows= 7, ncols = 1, vals= c(0,1,0,0,1,1,1), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
 
-b <- raster(nrows= 7, ncols = 1, vals= c(1, 0, 1,1,0,0,1), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
+b <- raster(nrows= 7, ncols = 1, vals= c(1, 1, 1,1,0,0,1), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
 
 Phillips <- stack(a,b)
 names(Phillips) <- c("T0", "T1")
@@ -53,7 +53,7 @@ Fot that same area we have a costlayer (*PhilCost*), we but the two middle cells
 
 
 ```{r Cost, echo=FALSE, fig.cap= "Raster with the cost of buying each cell, black cells are unavailable cells"}
-PhilCost <- raster(nrows= 7, ncols = 1, vals= c(0.5, 1, 0.5,NA,NA,0.25,0.25), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
+PhilCost <- raster(nrows= 7, ncols = 1, vals= c(0, 0.5, 0,NA,NA,0.25,0.25), res = 1, xmn=-0.5, xmx = 0.5, ymn = -4, ymx = 3)
 plot(PhilCost, colNA = "black")
 ```
 
@@ -281,6 +281,8 @@ solution <- lp(
 
 
 
+
+
 # visualize --------------------------------------------------------------------
 # combine with edge information
 
@@ -319,3 +321,57 @@ plot(TestStack)
 plot(max(TestStack))
 ```
 
+
+## Quadriatic solution for the same
+
+```{r, echo=F}
+library(optiSolve)
+DmatTest <- matrix(0, ncol = length(edges_formatted$edge_cost), nrow = length(edges_formatted$edge_cost))
+
+
+for(i in 1:length(edges_formatted$edge_cost)){
+  DmatTest[i,i] <- (edges_formatted$edge_cost[i])
+}
+
+mycop <- cop(f  = quadfun(Q = DmatTest),
+             lb = lbcon(0),
+             ub = ubcon(NA),
+             lc = lincon(A=constraints_matrix$lhs, dir=constraints_matrix$dir, val=constraints_matrix$rhs, name = 1:nrow(constraints_matrix$lhs)))
+res <- solvecop(mycop, solver="cccp", quiet=FALSE, trace=FALSE)
+
+
+```
+
+
+```{r}
+edges_solved <- bind_cols(edges_formatted, solution = res$x) %>% left_join(df_IDs) %>% dplyr::filter(solution != 0) %>% group_by(node_to, raster_id, timeslice_to) %>% summarise(solution = sum(solution))
+
+
+TestStack <- list()
+
+
+for(i in 1:nlayers(layers_habitat)){
+  Test<- layer_cost
+  values(Test) <- 0
+  values(Test)[edges_solved %>% dplyr::filter(timeslice_to == (i)) %>% pull(raster_id) %>%  unique()] <- edges_solved %>% dplyr::filter(timeslice_to == (i)) %>% group_by(raster_id) %>% summarise(flow = sum(solution))  %>% pull(flow)
+  TestStack[[i]] <- Test
+}
+
+TestStack <- do.call("stack", TestStack)
+
+names(TestStack) <- paste0("T", 1:nlayers(TestStack))
+
+```
+
+```{r, fig.cap="Time slice by time slice quadratic solution", echo=FALSE}
+plot(TestStack)
+```
+
+
+```{r, fig.cap="Global quadratic solution", echo=FALSE}
+plot(max(TestStack))
+```
+
+```{r SolutionQuad, echo = FALSE}
+kable(edges_solved,"latex", booktabs = T, row.names = F, caption = "Solution") %>% kable_styling(latex_options = c('striped', 'hold_position'))
+```
