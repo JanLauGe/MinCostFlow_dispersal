@@ -14,4 +14,4 @@
 #'   ...
 #' }
 #' @source \url{https://github.com/JanLauGe/MinCostFlow_dispersal/blob/master/literature/Phillips_2017_targetbased_site_prioritization_under_climate_change.pdf}
-"phillips_edges"
+"phillips_problem"

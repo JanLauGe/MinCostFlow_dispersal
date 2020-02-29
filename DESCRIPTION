@@ -1,15 +1,29 @@
 Package: dispRsal
 Title: What the Package Does (One Line, Title Case)
 Version: 0.0.0.9000
-Authors@R: 
-    person(given = "First",
-           family = "Last",
+Authors@R: c(
+    person(given = "Jan Laurens",
+           family = "Geffert",
            role = c("aut", "cre"),
-           email = "first.last@example.com",
-           comment = c(ORCID = "YOUR-ORCID-ID"))
+           email = "laurensgeffert@gmail.com",
+           comment = c(ORCID = "0000-0002-3307-268X")),
+    person(given = "Derek",
+           family = "Corcoran-Barrios",
+           role = c("aut"),
+           email = "derek.corcoran.barrios@gmail.com",
+           comment = c(ORCID = "YOUR-ORCID-ID")))
 Description: What the package does (one paragraph).
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
+Depends:
+    R (>= 3.4.0)
+Imports:
+    tidyverse,
+    magrittr
 Suggests: 
+    devtools,
     testthat (>= 2.1.0)
+VignetteBuilder: 
+    knitr
+RoxygenNote: 7.0.2

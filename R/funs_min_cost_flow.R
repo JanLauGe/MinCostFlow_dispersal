@@ -51,18 +51,18 @@ data_phillips_problem <- function() {
 }
 
 
+#' helper function to add new constraints to an already existsing
+#' list of constraints. Existing list should be length = 3 with elements
+#' - lhs = the left side of the optimization equation (coefficients)
+#' - dir = the condition operation, i.e. '>=', '==', or '<='
+#' - rhs = the constraint value
+#' TODO: add checks for names, length, etc.
 add_constraints <- function(
   constraints,
   new_lhs,
   new_dir,
   new_rhs
 ) {
-  #' helper function to add new constraints to an already existsing
-  #' list of constraints. Existing list should be length = 3 with elements
-  #' - lhs = the left side of the optimization equation (coefficients)
-  #' - dir = the condition operation, i.e. '>=', '==', or '<='
-  #' - rhs = the constraint value
-  #' TODO: add checks for names, length, etc.
   constraints[['lhs']] <- rbind(constraints[['lhs']], new_lhs)
   constraints[['dir']] <- c(constraints[['dir']], new_dir)
   constraints[['rhs']] <- c(constraints[['rhs']], new_rhs)
@@ -70,18 +70,19 @@ add_constraints <- function(
 }
 
 
+#' creates a constraint matrix for solving a minimum cost flow
+#' problem given a set of edges as data frame in the following format:
+#' - edge_id (primary key)
+#' - node_from (foreign key)
+#' - node_to (foreign key)
+#' - edge_capacity (int)
+#' - edge_cost (int)
+#' Assumptions:
+#' - source node is the node with the lowest ID
+#' - target node is the node with the highest ID
+#'
+#' @export
 create_constraints_matrix <- function(edges, total_flow) {
-  #' creates a constraint matrix for solving a minimum cost flow
-  #' problem given a set of edges as data frame in the following format:
-  #' - edge_id (primary key)
-  #' - node_from (foreign key)
-  #' - node_to (foreign key)
-  #' - edge_capacity (int)
-  #' - edge_cost (int)
-  #' Assumptions:
-  #' - source node is the node with the lowest ID
-  #' - target node is the node with the highest ID
-
   # extract information on edges
   ids_edges <- edges[['edge_id']]
   n_edges <- length(ids_edges)
@@ -105,7 +106,7 @@ create_constraints_matrix <- function(edges, total_flow) {
   #' that the result is smaller than or equal to capacity of that edge.
   #' TODO: We may be able to take this out if we are using node capacity constraints
   constraints[['lhs']] <- edges %>%
-    pull(edge_id) %>%
+    dplyr::pull(edge_id) %>%
     length() %>%
     diag() %>%
     set_colnames(edges[['edge_id']]) %>%
@@ -131,12 +132,12 @@ create_constraints_matrix <- function(edges, total_flow) {
   for (i in ids_nodes) {
     # input edges
     edges_in <- edges %>%
-      filter(node_to == i) %>%
-      pull(edge_id)
+      dplyr::filter(node_to == i) %>%
+      dplyr::pull(edge_id)
     # output edges
     edges_out <- edges %>%
-      filter(node_from == i) %>%
-      pull(edge_id)
+      dplyr::filter(node_from == i) %>%
+      dplyr::pull(edge_id)
     # set input coefficients to 1
     constraint_node_residuals[
       rownames(constraint_node_residuals) == i,
@@ -238,7 +239,7 @@ edge_distance_limit <- function(layer_cost, layers_habitat, Dist){
     .f = ~connections %>%
       mutate(
         node_from = from + ncell(layer_cost) * .x,
-        node_to= ncell(layer_cost) + (to + ncell(layer_cost) * .x)))
+        node_to = ncell(layer_cost) + (to + ncell(layer_cost) * .x)))
 
   connections <- connections %>% dplyr::select(-from, -to)
   return(connections)
