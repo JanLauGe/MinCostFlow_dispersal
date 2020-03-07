@@ -1,15 +1,17 @@
 Package: dispRsal
-Title: What the Package Does (One Line, Title Case)
-Version: 0.0.0.9000
-Authors@R: 
-    person(given = "First",
-           family = "Last",
-           role = c("aut", "cre"),
-           email = "first.last@example.com",
-           comment = c(ORCID = "YOUR-ORCID-ID"))
-Description: What the package does (one paragraph).
-License: MIT + file LICENSE
+Type: Package
+Title: Optimizing Dispersal Corridors Using Network Flow
+Version: 0.1.0
+Author: c(person("Derek", "Corcoran", email = "derek.corcoran.barrios@gmail.com",
+  role = c("aut", "cre"), comment = c(ORCID = "0000-0002-0248-6230")), 
+  person("Pablo A.", "Marquet", role = c("aut"), comment = c(ORCID = "0000-0001-6369-9339")))
+Maintainer: Derek Corcoran <derek.corcoran.barrios@gmail.com>
+Description: Simulates the extinction of species in the food web and it analyzes
+             its cascading effects, described in Dunne et al. (2002) <doi:10.1890/07-0507.1>.
+URL: https://derek-corcoran-barrios.github.io/NetworkExtintion/
+Depends: R (>= 3.5)
+Imports: dplyr, gdistance, igraph, lpSolve, magrittr, optiSolve, purrr,raster, tidyr
+License: GPL (>= 2)
 Encoding: UTF-8
 LazyData: true
-Suggests: 
-    testthat (>= 2.1.0)
+RoxygenNote: 7.0.2

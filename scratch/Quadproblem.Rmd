@@ -1,0 +1,13 @@
+---
+title: "Quadratic Problem"
+author: "Derek Corcoran"
+date: "2/24/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## How to solve a quadriatic problem using quadprog
+

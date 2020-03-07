@@ -79,9 +79,6 @@ layers_habitat <- layers_habitat * !is.na(layer_cost)
 
 This will modify the raster shown in figure 1 \@ref(fig:PhilDist) into the one we see in figure \@ref(fig:ModHab), notice that we lost 2 cells that use to be available when we first looked at the data.
 
-```{r}
-layers_habitat <- layers_habitat * !is.na(layer_cost)
-```
 
 ```{r ModHab, fig.cap="Habitat layers modified so that we take out the non available values", echo = FALSE}
 plot(layers_habitat)
